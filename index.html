@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="ur" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>زمین کی پیمائش</title>
+<style>
+:root{--bg:#f3ecd9;--ink:#2b2418;--soil:#6b4a2b;--field:#2f6b3a;--wheat:#d9a441;--card:#fffaf0;--line:#d8cba8;--warn:#a4410f}
+@media(prefers-color-scheme:dark){:root{--bg:#1d1a12;--ink:#f1e8d2;--soil:#c9a173;--field:#6fbf7f;--wheat:#e0b050;--card:#2a261b;--line:#443d2b;--warn:#f0a070}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Noto Nastaliq Urdu","Jameel Noori Nastaleeq","Noto Naskh Arabic",system-ui,sans-serif;line-height:2;padding:12px 12px 40px;max-width:520px;margin-inline:auto}
+h1{font-size:1.4rem;margin:4px 0 8px;color:var(--soil)}
+.box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px}
+#gps{font-size:.95rem}
+#gps.warn{color:var(--warn)}
+#map{direction:ltr;height:230px;border-radius:8px;display:none;margin-bottom:10px}
+svg{direction:ltr;width:100%;height:auto;display:block;background:var(--bg);border-radius:8px}
+button{font:inherit;border:0;border-radius:10px;padding:12px;font-weight:600;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:3px solid var(--wheat);outline-offset:2px}
+.row{display:flex;gap:8px;margin-bottom:8px}
+.row button{flex:1}
+#mark{width:100%;background:var(--field);color:#fff;font-size:1.2rem;padding:16px;margin-bottom:8px}
+.sec{background:transparent;border:2px solid var(--soil);color:var(--soil)}
+.mode{background:var(--wheat);color:#2b2418}
+.mode.on{outline:3px solid var(--soil)}
+#res{font-size:1.9rem;font-weight:700;color:var(--field);margin:0}
+#sub{margin:2px 0 6px}
+#sides{margin:6px 0 0;padding-inline-start:24px;font-size:.95rem}
+label{font-size:.9rem}
+input{font:inherit;width:90px;padding:6px;border-radius:6px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+.note{font-size:.85rem;opacity:.8}
+</style>
+</head>
+<body>
+<h1>زمین کی پیمائش</h1>
+
+<div class="box"><div id="gps">جی پی ایس ڈھونڈ رہا ہوں… لوکیشن کی اجازت دیں۔</div></div>
+
+<div id="map"></div>
+<div class="box"><svg id="svg" viewBox="0 0 300 260" role="img" aria-label="کھیت کا نقشہ"></svg></div>
+
+<button id="mark">📍 یہاں نشان لگاؤ</button>
+<div class="row">
+  <button class="sec" id="undo">پچھلا ہٹاؤ</button>
+  <button class="sec" id="reset">سب مٹاؤ</button>
+</div>
+
+<div class="row">
+  <button class="mode on" id="mK">کنال میں</button>
+  <button class="mode" id="mM">مرلے میں</button>
+</div>
+
+<div class="box">
+  <p id="res">—</p>
+  <p id="sub"></p>
+  <ol id="sides"></ol>
+</div>
+
+<div class="box">
+  <label>1 مرلہ = <input id="marla" type="number" value="272" min="100" max="400"> مربع فٹ</label><br>
+  <label>1 کنال = <b>20</b> مرلے، 1 کِلّہ = <b>8</b> کنال</label>
+  <p class="note">ہر کونے پر 2–3 سیکنڈ رک کر نشان لگائیں۔ کھلے آسمان کے نیچے جی پی ایس ٹھیک چلتا ہے۔ ناپ میں 3–10 میٹر تک فرق ہو سکتا ہے۔ انٹرنیٹ ہو تو اوپر نقشہ بھی نظر آئے گا، بغیر انٹرنیٹ کے بھی ناپ چلتا رہے گا۔</p>
+</div>
+
+<script>
+var FT = 3.28084, SQFT = 10.7639, R = 6371000;
+var pts = [], cur = null, mode = 'K';
+var $ = function (id) { return document.getElementById(id); };
+
+function proj(p, o) {
+  var r = Math.PI / 180;
+  return { x: (p.lon - o.lon) * r * R * Math.cos(o.lat * r), y: (p.lat - o.lat) * r * R };
+}
+
+/* ---------- GPS ---------- */
+if (!navigator.geolocation) {
+  $('gps').textContent = 'اس براؤزر میں جی پی ایس نہیں ہے۔';
+} else {
+  navigator.geolocation.watchPosition(function (p) {
+    cur = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy };
+    var ft = Math.round(cur.acc * FT);
+    var g = $('gps');
+    g.textContent = 'جی پی ایس چالو ہے۔ ابھی کا فرق تقریباً ±' + ft + ' فٹ' + (cur.acc > 15 ? ' (زیادہ ہے، تھوڑا رکیں)' : ' (ٹھیک ہے)');
+    g.className = cur.acc > 15 ? 'warn' : '';
+    draw(); updateMap(!window._centered);
+    window._centered = true;
+  }, function (e) {
+    $('gps').textContent = 'جی پی ایس نہیں ملا۔ فون کی لوکیشن چالو کر کے براؤزر کو اجازت دیں۔';
+    $('gps').className = 'warn';
+  }, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+}
+
+/* ---------- buttons ---------- */
+$('mark').onclick = function () {
+  if (!cur) { alert('ابھی جی پی ایس نہیں ملا۔ تھوڑا رکیں۔'); return; }
+  pts.push({ lat: cur.lat, lon: cur.lon });
+  refresh(); fitMap();
+  if (navigator.vibrate) navigator.vibrate(60);
+};
+$('undo').onclick = function () { pts.pop(); refresh(); };
+$('reset').onclick = function () { if (!pts.length || confirm('سارے نشان مٹا دوں؟')) { pts = []; refresh(); } };
+$('mK').onclick = function () { mode = 'K'; $('mK').classList.add('on'); $('mM').classList.remove('on'); calc(); };
+$('mM').onclick = function () { mode = 'M'; $('mM').classList.add('on'); $('mK').classList.remove('on'); calc(); };
+$('marla').oninput = calc;
+
+function refresh() { draw(); calc(); updateMap(false); }
+
+/* ---------- hisaab ---------- */
+function calc() {
+  var res = $('res'), sub = $('sub'), sides = $('sides');
+  sides.innerHTML = '';
+  if (pts.length < 3) {
+    res.textContent = '—';
+    sub.textContent = pts.length + ' نشان لگے ہیں۔ کم از کم 3 کونے چاہئیں۔';
+    return;
+  }
+  var L = pts.map(function (p) { return proj(p, pts[0]); });
+  var a = 0;
+  for (var i = 0; i < L.length; i++) {
+    var j = (i + 1) % L.length;
+    a += L[i].x * L[j].y - L[j].x * L[i].y;
+    var d = Math.hypot(L[j].x - L[i].x, L[j].y - L[i].y) * FT;
+    var li = document.createElement('li');
+    li.textContent = 'کونا ' + (i + 1) + ' سے ' + (j + 1) + ': ' + d.toFixed(0) + ' فٹ';
+    sides.appendChild(li);
+  }
+  var sqft = Math.abs(a) / 2 * SQFT;
+  var mq = parseFloat($('marla').value) || 272;
+  var marla = sqft / mq, kanal = marla / 20, killa = kanal / 8;
+  if (mode === 'K') {
+    res.textContent = kanal.toFixed(2) + ' کنال';
+    var k = Math.floor(kanal), m = (marla - k * 20);
+    sub.textContent = '= ' + k + ' کنال ' + m.toFixed(1) + ' مرلے  |  ' + killa.toFixed(3) + ' کِلّہ  |  ' + Math.round(sqft) + ' مربع فٹ';
+  } else {
+    res.textContent = marla.toFixed(1) + ' مرلے';
+    sub.textContent = '= ' + kanal.toFixed(2) + ' کنال  |  ' + killa.toFixed(3) + ' کِلّہ  |  ' + Math.round(sqft) + ' مربع فٹ';
+  }
+}
+
+/* ---------- drawing (works offline) ---------- */
+function draw() {
+  var svg = $('svg'), W = 300, H = 260, pad = 26;
+  var all = pts.slice(); if (cur) all.push(cur);
+  if (!all.length) { svg.innerHTML = '<text x="150" y="130" text-anchor="middle" fill="currentColor" font-size="14">نشان لگاتے ہی یہاں لکیر نظر آئے گی</text>'; return; }
+  var o = pts.length ? pts[0] : cur;
+  var L = all.map(function (p) { return proj(p, o); });
+  var xs = L.map(function (p) { return p.x; }), ys = L.map(function (p) { return p.y; });
+  var minx = Math.min.apply(null, xs), maxx = Math.max.apply(null, xs);
+  var miny = Math.min.apply(null, ys), maxy = Math.max.apply(null, ys);
+  var span = Math.max(maxx - minx, maxy - miny, 10);
+  var s = Math.min((W - 2 * pad) / span, (H - 2 * pad) / span);
+  var cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
+  function X(p) { return (W / 2 + (p.x - cx) * s).toFixed(1); }
+  function Y(p) { return (H / 2 - (p.y - cy) * s).toFixed(1); }
+  var P = L.slice(0, pts.length), out = '';
+  if (P.length >= 3) out += '<polygon points="' + P.map(function (p) { return X(p) + ',' + Y(p); }).join(' ') + '" fill="#2f6b3a" fill-opacity=".18" stroke="none"/>';
+  if (P.length >= 2) out += '<polyline points="' + P.map(function (p) { return X(p) + ',' + Y(p); }).join(' ') + '" fill="none" stroke="#2f6b3a" stroke-width="3" stroke-linejoin="round"/>';
+  if (P.length >= 3) out += '<line x1="' + X(P[P.length - 1]) + '" y1="' + Y(P[P.length - 1]) + '" x2="' + X(P[0]) + '" y2="' + Y(P[0]) + '" stroke="#2f6b3a" stroke-width="2" stroke-dasharray="5 4"/>';
+  if (cur && P.length) {
+    var c = L[L.length - 1], l = P[P.length - 1];
+    out += '<line x1="' + X(l) + '" y1="' + Y(l) + '" x2="' + X(c) + '" y2="' + Y(c) + '" stroke="#d9a441" stroke-width="3" stroke-dasharray="2 5" stroke-linecap="round"/>';
+  }
+  P.forEach(function (p, i) {
+    out += '<circle cx="' + X(p) + '" cy="' + Y(p) + '" r="9" fill="#6b4a2b"/><text x="' + X(p) + '" y="' + (+Y(p) + 4) + '" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">' + (i + 1) + '</text>';
+  });
+  if (cur) { var q = L[L.length - 1]; out += '<circle cx="' + X(q) + '" cy="' + Y(q) + '" r="6" fill="#d9a441" stroke="#2b2418" stroke-width="2"/>'; }
+  svg.innerHTML = out;
+}
+
+/* ---------- map (only when online) ---------- */
+var map = null, layer = null, me = null;
+function loadMap() {
+  if (map || !navigator.onLine || window._lf) return;
+  window._lf = true;
+  var css = document.createElement('link');
+  css.rel = 'stylesheet';
+  css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css';
+  document.head.appendChild(css);
+  var js = document.createElement('script');
+  js.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js';
+  js.onload = function () {
+    $('map').style.display = 'block';
+    map = L.map('map', { zoomControl: true }).setView(cur ? [cur.lat, cur.lon] : [31, 75], cur ? 18 : 6);
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, attribution: 'Esri' }).addTo(map);
+    layer = L.layerGroup().addTo(map);
+    updateMap(false);
+  };
+  js.onerror = function () { window._lf = false; };
+  document.head.appendChild(js);
+}
+window.addEventListener('online', loadMap);
+loadMap();
+
+function updateMap(center) {
+  if (!map) { loadMap(); return; }
+  layer.clearLayers();
+  var ll = pts.map(function (p) { return [p.lat, p.lon]; });
+  if (ll.length >= 2) L.polygon(ll, { color: '#ffd24d', weight: 3, fillOpacity: .15 }).addTo(layer);
+  ll.forEach(function (p, i) { L.circleMarker(p, { radius: 6, color: '#fff', fillColor: '#6b4a2b', fillOpacity: 1, weight: 2 }).bindTooltip(String(i + 1), { permanent: true, direction: 'top', offset: [0, -4] }).addTo(layer); });
+  if (cur) {
+    L.circleMarker([cur.lat, cur.lon], { radius: 7, color: '#fff', fillColor: '#2f6bff', fillOpacity: 1, weight: 2 }).addTo(layer);
+    if (center) map.setView([cur.lat, cur.lon], 18);
+  }
+}
+function fitMap() {
+  if (map && pts.length >= 2) map.fitBounds(pts.map(function (p) { return [p.lat, p.lon]; }), { maxZoom: 19, padding: [20, 20] });
+}
+
+draw(); calc();
+</script>
+</body>
+</html>
